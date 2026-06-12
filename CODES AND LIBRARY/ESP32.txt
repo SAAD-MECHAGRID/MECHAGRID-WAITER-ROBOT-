@@ -1,0 +1,277 @@
+/*
+==================================================
+        MECHAGRID WAITER ROBOT
+        ESP32 MONITORING SYSTEM
+==================================================
+
+Features:
+✓ UART Communication with AVR
+✓ 20x4 LCD Display
+✓ SD Card Logging
+✓ WiFi Dashboard
+✓ Battery Monitoring Display
+✓ Robot State Monitoring
+✓ Path Display
+
+==================================================
+*/
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <SPI.h>
+#include <SD.h>
+
+// -------- WIFI --------
+const char* ssid = "YOUR_WIFI";
+const char* password = "YOUR_PASSWORD";
+
+// -------- LCD --------
+LiquidCrystal_I2C lcd(0x27,20,4);
+
+// -------- SD CARD --------
+#define SD_CS 4
+
+// -------- WEB SERVER --------
+WebServer server(80);
+
+// -------- ROBOT VARIABLES --------
+String stateRobot = "IDLE";
+String battery = "0.0";
+String distanceCM = "0";
+String path = "---";
+
+unsigned long lcdTimer = 0;
+
+// =================================================
+// WEB PAGE
+// =================================================
+void handleRoot()
+{
+  String page;
+
+  page += "<html><head>";
+  page += "<meta http-equiv='refresh' content='2'>";
+  page += "</head><body>";
+
+  page += "<h1>MECHAGRID WAITER ROBOT</h1>";
+
+  page += "<h2>Robot Status</h2>";
+
+  page += "<p>State : ";
+  page += stateRobot;
+  page += "</p>";
+
+  page += "<p>Battery : ";
+  page += battery;
+  page += " V</p>";
+
+  page += "<p>Distance : ";
+  page += distanceCM;
+  page += " cm</p>";
+
+  page += "<p>Path : ";
+  page += path;
+  page += "</p>";
+
+  page += "</body></html>";
+
+  server.send(200,"text/html",page);
+}
+
+// =================================================
+// LCD UPDATE
+// =================================================
+void updateLCD()
+{
+  if(millis()-lcdTimer < 500)
+    return;
+
+  lcdTimer = millis();
+
+  lcd.clear();
+
+  lcd.setCursor(0,0);
+  lcd.print("MechaGrid WaiterBot");
+
+  lcd.setCursor(0,1);
+  lcd.print("State:");
+  lcd.print(stateRobot);
+
+  lcd.setCursor(0,2);
+  lcd.print("Bat:");
+  lcd.print(battery);
+  lcd.print("V");
+
+  lcd.print(" D:");
+  lcd.print(distanceCM);
+
+  lcd.setCursor(0,3);
+  lcd.print("Path:");
+  lcd.print(path);
+}
+
+// =================================================
+// SAVE TO SD
+// =================================================
+void saveLog(String msg)
+{
+  File file = SD.open("/robotlog.txt", FILE_APPEND);
+
+  if(file)
+  {
+    file.println(msg);
+    file.close();
+  }
+}
+
+// =================================================
+// PARSE UART DATA
+// Example:
+// BAT=11.8,DIST=25,STATE=FOLLOW,PATH=SLSR
+// =================================================
+void parseData(String msg)
+{
+  int p;
+
+  p = msg.indexOf("BAT=");
+  if(p >= 0)
+  {
+    int e = msg.indexOf(",",p);
+    battery = msg.substring(p+4,e);
+  }
+
+  p = msg.indexOf("DIST=");
+  if(p >= 0)
+  {
+    int e = msg.indexOf(",",p);
+    distanceCM = msg.substring(p+5,e);
+  }
+
+  p = msg.indexOf("STATE=");
+  if(p >= 0)
+  {
+    int e = msg.indexOf(",",p);
+
+    if(e==-1)
+      stateRobot = msg.substring(p+6);
+    else
+      stateRobot = msg.substring(p+6,e);
+  }
+
+  p = msg.indexOf("PATH=");
+  if(p >= 0)
+  {
+    path = msg.substring(p+5);
+  }
+}
+
+// =================================================
+// RECEIVE DATA FROM AVR
+// =================================================
+void receiveAVR()
+{
+  if(Serial.available())
+  {
+    String msg =
+      Serial.readStringUntil('\n');
+
+    msg.trim();
+
+    Serial.println("RX:");
+    Serial.println(msg);
+
+    parseData(msg);
+
+    saveLog(msg);
+  }
+}
+
+// =================================================
+// SETUP
+// =================================================
+void setup()
+{
+  Serial.begin(9600);
+
+  // LCD
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(0,0);
+  lcd.print("   MechaGrid");
+
+  lcd.setCursor(0,1);
+  lcd.print(" Waiter Robot");
+
+  lcd.setCursor(0,2);
+  lcd.print(" Spring 2026");
+
+  lcd.setCursor(0,3);
+  lcd.print("Initializing...");
+
+  delay(3000);
+
+  lcd.clear();
+
+  // SD CARD
+  if(SD.begin(SD_CS))
+  {
+    Serial.println("SD OK");
+
+    File file =
+      SD.open("/robotlog.txt",FILE_APPEND);
+
+    if(file)
+    {
+      file.println("===== START =====");
+      file.close();
+    }
+  }
+  else
+  {
+    Serial.println("SD FAIL");
+  }
+
+  // WIFI
+  WiFi.begin(ssid,password);
+
+  lcd.clear();
+  lcd.print("Connecting WiFi");
+
+  while(WiFi.status()!=WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+
+  lcd.clear();
+
+  lcd.setCursor(0,0);
+  lcd.print("WiFi Connected");
+
+  lcd.setCursor(0,1);
+  lcd.print(WiFi.localIP());
+
+  Serial.println();
+  Serial.println("WiFi Connected");
+  Serial.println(WiFi.localIP());
+
+  delay(3000);
+
+  server.on("/",handleRoot);
+  server.begin();
+}
+
+// =================================================
+// LOOP
+// =================================================
+void loop()
+{
+  receiveAVR();
+
+  updateLCD();
+
+  server.handleClient();
+}
